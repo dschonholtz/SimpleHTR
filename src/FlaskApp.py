@@ -24,16 +24,11 @@ class FilePaths:
     fnInfer = '../data/test.png'
     fnCorpus = '../data/corpus.txt'
 
-names = [
-        'stuff'
-        'Bobby Bluestocking',
-        'Candice Competent',
-        'Honest Jim',
-        'Candidate 3(Contest 1)',
-        'Indie Pendant',
-        'Jim Bell',
-        'Polyanne Precious'
-]
+
+def get_names():
+    with open('../data/BestDemo.txt', 'r') as f:
+        names = f.read()
+    return names.splitlines()
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -54,10 +49,11 @@ def upload_file():
         with open(filepath, 'wb') as f:
             f.write(response.file.read())
         try:
-            recognized, probability = infer_set(app.model, filepath, names)
+            recognized, probability = infer_set(app.model, filepath, get_names())
             returned = {'recognized': str(recognized[0]), 'probability': str(probability[0][0])}
         except IndexError:
             returned = {'error': 'no name found'}
+        os.remove(filepath)
         return jsonify(returned)
 
 
