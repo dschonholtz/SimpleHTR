@@ -159,7 +159,7 @@ def crop(img, name):
         # a contour is text if it crosses the vertical center of the image
         # and is not within the left 'oval' edge (Note: this only works for
         # left ovals
-        if y < v_center < y + h - 5 and x + w > 50:
+        if y < v_center < y + h and x + w > 50:
             # found potential text so add to rectangles to consider
             rects.append([x, y, x+w, y+h])
             cv2.rectangle(c_img, (x,y), (x+w,y+h), (255,0,0))

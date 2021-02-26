@@ -62,6 +62,6 @@ def upload_file():
 
 
 if __name__ == '__main__':
-    model = Model(open(FilePaths.fnCharList).read(), DecoderType.BestPath, mustRestore=True)
+    model = Model(open(FilePaths.fnCharList).read(), DecoderType.WordBeamSearch, mustRestore=True)
     app.model = model
     app.run()
