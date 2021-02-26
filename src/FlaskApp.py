@@ -49,9 +49,13 @@ def upload_file():
         with open(filepath, 'wb') as f:
             f.write(response.file.read())
         try:
+            print(get_names())
             recognized, probability = infer_set(app.model, filepath, get_names())
-            returned = {'recognized': str(recognized[0]), 'probability': str(probability[0][0])}
-        except IndexError:
+            print(recognized)
+            print(probability)
+            returned = {'recognized': str(recognized[0]), 'probability': str(probability[0])}
+        except IndexError as ie:
+            # raise
             returned = {'error': 'no name found'}
         os.remove(filepath)
         return jsonify(returned)

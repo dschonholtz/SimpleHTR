@@ -221,11 +221,12 @@ def infer_set(model, filepath, names=()):
                 prop *= probability[0]
             if names:
                 (match, score) = process.extractOne(name, names)
+                out_names.append(match)
             else:
                 match = ''
                 score = 0
-            out_names.append(name)
-            out_probs.append(probability)
+                out_names.append(name)
+            out_probs.append(prop)
             print(fname, round(prop * 100, 2), name, score, match)
     return out_names, out_probs
 
