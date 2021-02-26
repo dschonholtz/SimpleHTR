@@ -1,9 +1,12 @@
 import argparse
 import json
+import glob
 
 import cv2
+import numpy as np
 import editdistance
 from path import Path
+from fuzzywuzzy import process
 
 from DataLoaderIAM import DataLoaderIAM, Batch
 from Model import Model, DecoderType
@@ -14,7 +17,7 @@ class FilePaths:
     "filenames and paths to data"
     fnCharList = '../model/charList.txt'
     fnSummary = '../model/summary.json'
-    fnInfer = '../data/test.png'
+    fnInfer = '../data/*.png'
     fnCorpus = '../data/corpus.txt'
 
 
@@ -98,14 +101,148 @@ def validate(model, loader):
     print(f'Character error rate: {charErrorRate * 100.0}%. Word accuracy: {wordAccuracy * 100.0}%.')
     return charErrorRate, wordAccuracy
 
+def remove_horiz_lines(image):
+    """ Clean up the image by removing horizontal lines """
+    orig_image = np.array(image)
+    rtn, thresh = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-def infer(model, fnImg):
+    # Remove horizontal
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 1))
+    detected_h_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel,
+                                      iterations=1)
+    cnts = cv2.findContours(detected_h_lines, cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE)
+    cnts = cnts[0] if len(cnts) == 2 else cnts[1]
+    cv2.drawContours(image, cnts, -1, (255, 255, 255), 2)
+
+    # Repair image
+    repair_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 6))
+    result = 255 - cv2.morphologyEx(255 - image, cv2.MORPH_CLOSE, repair_kernel,
+                                    iterations=1)
+    show_image = False
+    if show_image:
+        for wnd in ['image', 'orig_image', 'thresh', 'detected_h_lines', 'result']:
+            cv2.namedWindow(wnd, cv2.WINDOW_NORMAL)
+            w, h = image.shape
+            cv2.resizeWindow(wnd, h * 3, w * 3)
+
+        cv2.imshow('orig_image', orig_image)
+        cv2.imshow('thresh', thresh)
+        cv2.imshow('detected_h_lines', detected_h_lines)
+        cv2.imshow('image', image)
+        cv2.imshow('result', result)
+        cv2.waitKey()
+        cv2.destroyAllWindows()
+    return result
+
+def crop(img, name):
+    """ Find the potential text area an split into works. This returns
+    and array of images where each image should be a single word
+    """
+    show_image = False
+    img = remove_horiz_lines(img)
+
+    # find the outlines for the 'text'
+    ret, threshold = cv2.threshold(img, 176, 255, cv2.THRESH_BINARY_INV)
+    contours, hierarchy = cv2.findContours(threshold, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+    # for testing draw the contours on the debug image
+    c_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    cv2.drawContours(c_img, contours, -1, (0, 255, 0))
+
+    # for each contour check if it could be text. If not white out the contour
+    # in the image.
+    v_center = img.shape[0] / 2
+    rects = []
+    for idx, cnt in enumerate(contours):
+        (x, y, w, h) = cv2.boundingRect(cnt)
+        # a contour is text if it crosses the vertical center of the image
+        # and is not within the left 'oval' edge (Note: this only works for
+        # left ovals
+        if y < v_center < y + h - 5 and x + w > 50:
+            # found potential text so add to rectangles to consider
+            rects.append([x, y, x+w, y+h])
+            cv2.rectangle(c_img, (x,y), (x+w,y+h), (255,0,0))
+        else:
+            # else white out the contour area
+            cv2.drawContours(c_img, contours, idx, (255, 255, 255), -1)
+            cv2.drawContours(img, contours, idx, (255, 255, 255), -1)
+
+    # soft the rectangles left to right and then group into works, i.e. move
+    # to next 'group' (i.e. word) if the gap between the rectangles is large
+    # enough to be a word break.
+    rects.sort(key=lambda x: x[0])
+    grouped_rects = [rects.pop(0)]
+    for t_rect in rects:
+        cur_rect = grouped_rects[-1]
+        if t_rect[0] > cur_rect[2] + 5:
+            grouped_rects.append(t_rect)
+        else:
+            cur_rect[1] = min(cur_rect[1], t_rect[1])
+            cur_rect[2] = max(cur_rect[2], t_rect[2])
+            cur_rect[3] = max(cur_rect[3], t_rect[3])
+
+    # clip the workds into their own images
+    images = []
+    for g_rect in grouped_rects:
+        cv2.rectangle(c_img, (g_rect[0],g_rect[1]), (g_rect[2], g_rect[3]), (0,0,255))
+        images.append(img[g_rect[1]:g_rect[3], g_rect[0]:g_rect[2]])
+
+    if show_image:
+        for wnd in ['orig_image', 'threshold', 'image']:
+            cv2.namedWindow(wnd, cv2.WINDOW_NORMAL)
+            w, h = img.shape
+            cv2.resizeWindow(wnd, h * 3, w * 3)
+        cv2.imshow('orig_image', img)
+        cv2.imshow('threshold', threshold)
+
+        cv2.imshow('image', c_img)
+        cv2.waitKey(0)
+    cv2.imwrite(name, c_img)
+
+    return images
+
+
+def infer_set(model, filepath, names=()):
     "recognize text in image provided by file path"
-    img = preprocess(cv2.imread(fnImg, cv2.IMREAD_GRAYSCALE), Model.imgSize)
+    out_names = []
+    out_probs = []
+    for fname in glob.glob(filepath):
+        if '-out.jpg' not in fname:
+            img = cv2.imread(fname, cv2.IMREAD_GRAYSCALE)
+            print(img.shape)
+            out_name = fname.replace('.jpg', '-out.jpg')
+            imgs = crop(img, out_name)
+            name = ''
+            prop = 1
+            for img in imgs:
+                (recognized, probability) = infer(model, img)
+                name += recognized[0] + ' '
+                prop *= probability[0]
+            if names:
+                (match, score) = process.extractOne(name, names)
+            else:
+                match = ''
+                score = 0
+            out_names.append(name)
+            out_probs.append(probability)
+            print(fname, round(prop * 100, 2), name, score, match)
+    return out_names, out_probs
+
+
+def infer(model, img):
+    img = preprocess(img, Model.imgSize)
+    show_window = False
+    if show_window:
+        timg = (img + 0.5) * 255
+        timg = timg.astype(np.uint8)
+        cv2.namedWindow('test', cv2.WINDOW_NORMAL)
+        w, h = timg.shape
+        cv2.resizeWindow('test', h * 4, w * 4)
+        cv2.imshow('test', timg)
+        cv2.waitKey(0)
     batch = Batch(None, [img])
-    (recognized, probability) = model.inferBatch(batch, True)
-    print(f'Recognized: "{recognized[0]}"')
-    print(f'Probability: {probability[0]}')
+    return model.inferBatch(batch, True)
 
 
 def main():
@@ -150,9 +287,18 @@ def main():
 
     # infer text on test image
     else:
+        names = [
+            'Bobby Bluestocking',
+            'Candice Competent',
+            'Honest Jim',
+            'Candidate 3(Contest 1)',
+            'Indie Pendant',
+            'Jim Bell',
+            'Polyanne Precious'
+        ]
         model = Model(open(FilePaths.fnCharList).read(), decoderType, mustRestore=True, dump=args.dump)
-        infer(model, FilePaths.fnInfer)
-
+        data = infer_set(model, FilePaths.fnInfer, names)
+        print(data)
 
 if __name__ == '__main__':
     main()
