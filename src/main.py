@@ -226,7 +226,7 @@ def infer_set(model, filepath, names=()):
                 match = ''
                 score = 0
                 out_names.append(name)
-            out_probs.append(prop)
+            out_probs.append(score / 100)
             print(fname, round(prop * 100, 2), name, score, match)
     return out_names, out_probs
 
